@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { NLAT, NLON, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX } from "../data/presets";
+import { NLAT, NLON, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, clampGridIndex } from "../data/presets";
 import { COASTLINE_POLYLINES, INDIA_LAND_BORDERS, REFERENCE_CITIES } from "../data/indiaGeo";
 import { LUTS, cssGradient, sampleLut } from "../utils/colormaps";
 
@@ -19,6 +19,133 @@ function polylineToPoints(line) {
   return line.map(([lon, lat]) => `${lonToX(lon).toFixed(1)},${latToY(lat).toFixed(1)}`).join(" ");
 }
 
+function sampleBilinear(grid, x, y) {
+  if (!grid) return 0;
+  // Cell centers sit at (c + 0.5) / NLON and (NLAT - 0.5 - r) / NLAT
+  const gx = Math.max(0, Math.min(NLON - 1.0001, (x / CANVAS_W) * NLON - 0.5));
+  const gy = Math.max(0, Math.min(NLAT - 1.0001, (1 - y / CANVAS_H) * NLAT - 0.5));
+  const c0 = Math.floor(gx);
+  const r0 = Math.floor(gy);
+  const c1 = Math.min(NLON - 1, c0 + 1);
+  const r1 = Math.min(NLAT - 1, r0 + 1);
+  const tx = gx - c0;
+  const ty = gy - r0;
+
+  const v00 = grid[r0][c0];
+  const v10 = grid[r0][c1];
+  const v01 = grid[r1][c0];
+  const v11 = grid[r1][c1];
+  return (
+    v00 * (1 - tx) * (1 - ty) +
+    v10 * tx * (1 - ty) +
+    v01 * (1 - tx) * ty +
+    v11 * tx * ty
+  );
+}
+
+function StreamlineCanvas({ active, uGrid, vGrid, isFlux, isDiff }) {
+  const flowRef = useRef(null);
+  const fieldRef = useRef({ uGrid, vGrid, isFlux, isDiff });
+
+  useEffect(() => {
+    fieldRef.current = { uGrid, vGrid, isFlux, isDiff };
+  }, [uGrid, vGrid, isFlux, isDiff]);
+
+  useEffect(() => {
+    const canvas = flowRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+
+    if (!active) {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      return;
+    }
+
+    const COUNT = 220;
+    const particles = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * CANVAS_W,
+      y: Math.random() * CANVAS_H,
+      age: Math.floor(Math.random() * 90),
+      maxAge: 70 + Math.floor(Math.random() * 50),
+    }));
+
+    let rafId = 0;
+    let lastTs = performance.now();
+    const step = (ts) => {
+      // Normalize frame delta to 60Hz (16.67ms) so 120Hz/144Hz screens stay calm and consistent
+      const dtScale = Math.min(2.0, Math.max(0.25, (ts - lastTs) / 16.67));
+      lastTs = ts;
+
+      const { uGrid: ug, vGrid: vg, isFlux: fluxMode, isDiff: diffMode } = fieldRef.current;
+
+      // Fade previous particle trails gently without tinting the radar map underneath
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineWidth = fluxMode ? 1.4 : 1.15;
+      ctx.lineCap = "round";
+
+      const gain = (fluxMode ? 0.0021 : diffMode ? 0.14 : 0.065) * dtScale;
+
+      if (ug && vg) {
+        for (let i = 0; i < COUNT; i++) {
+          const p = particles[i];
+          const u = sampleBilinear(ug, p.x, p.y);
+          const v = sampleBilinear(vg, p.x, p.y);
+          const mag = Math.hypot(u, v);
+
+          if (p.age >= p.maxAge || mag < (fluxMode ? 4 : 0.15)) {
+            p.x = Math.random() * CANVAS_W;
+            p.y = Math.random() * CANVAS_H;
+            p.age = 0;
+            p.maxAge = 70 + Math.floor(Math.random() * 50);
+            continue;
+          }
+
+          const nx = p.x + u * gain;
+          const ny = p.y - v * gain; // north (+v) moves up (-y)
+
+          if (nx < 0 || nx > CANVAS_W || ny < 0 || ny > CANVAS_H) {
+            p.x = Math.random() * CANVAS_W;
+            p.y = Math.random() * CANVAS_H;
+            p.age = 0;
+            continue;
+          }
+
+          const alpha = Math.min(0.88, 0.28 + (fluxMode ? mag * 0.0025 : mag * 0.055));
+          ctx.strokeStyle = fluxMode
+            ? `rgba(13, 148, 136, ${alpha.toFixed(2)})`
+            : `rgba(15, 23, 42, ${alpha.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(nx, ny);
+          ctx.stroke();
+
+          p.x = nx;
+          p.y = ny;
+          p.age++;
+        }
+      }
+
+      rafId = requestAnimationFrame(step);
+    };
+
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
+  }, [active]);
+
+  return (
+    <canvas
+      ref={flowRef}
+      width={CANVAS_W}
+      height={CANVAS_H}
+      className="pointer-events-none absolute inset-0 block h-full w-full"
+    />
+  );
+}
+
 function MapCard({
   title,
   subtitle,
@@ -26,6 +153,8 @@ function MapCard({
   tempGridK,
   uGrid,
   vGrid,
+  fluxUGrid,
+  fluxVGrid,
   vmin,
   vmax,
   colormap,
@@ -33,6 +162,8 @@ function MapCard({
   shockBox,
   allowDraw,
   onDrawBoxCommit,
+  onSelectTarget,
+  selectedTarget,
   hoverCell,
   onHoverCell,
   dragPreview,
@@ -72,7 +203,6 @@ function MapCard({
     }
     offCtx.putImageData(img, 0, 0);
 
-    // Smooth AccuWeather radar-style interpolation while preserving exact grid indices
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -89,68 +219,72 @@ function MapCard({
   };
 
   const handlePointerDown = (e) => {
-    if (!allowDraw) return;
     const pt = toGridCoords(e.clientX, e.clientY);
-    dragStartRef.current = pt;
-    onDragPreview({ latMin: pt.lat, latMax: pt.lat, lonMin: pt.lon, lonMax: pt.lon });
+    dragStartRef.current = { pt, clientX: e.clientX, clientY: e.clientY, dragged: false };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e) => {
     const pt = toGridCoords(e.clientX, e.clientY);
     onHoverCell(pt);
-    if (allowDraw && dragStartRef.current) {
-      const s = dragStartRef.current;
-      onDragPreview({
-        latMin: Math.min(s.lat, pt.lat),
-        latMax: Math.max(s.lat, pt.lat),
-        lonMin: Math.min(s.lon, pt.lon),
-        lonMax: Math.max(s.lon, pt.lon),
-      });
+    const start = dragStartRef.current;
+    if (allowDraw && start) {
+      const movedPx = Math.hypot(e.clientX - start.clientX, e.clientY - start.clientY);
+      if (movedPx >= 5) {
+        start.dragged = true;
+        onDragPreview({
+          latMin: Math.min(start.pt.lat, pt.lat),
+          latMax: Math.max(start.pt.lat, pt.lat),
+          lonMin: Math.min(start.pt.lon, pt.lon),
+          lonMax: Math.max(start.pt.lon, pt.lon),
+        });
+      }
     }
   };
 
   const handlePointerUp = (e) => {
-    if (!allowDraw || !dragStartRef.current) return;
+    const start = dragStartRef.current;
+    if (!start) return;
     const pt = toGridCoords(e.clientX, e.clientY);
-    const s = dragStartRef.current;
     dragStartRef.current = null;
     onDragPreview(null);
-    onDrawBoxCommit({
-      latMin: Math.min(s.lat, pt.lat),
-      latMax: Math.max(s.lat, pt.lat),
-      lonMin: Math.min(s.lon, pt.lon),
-      lonMax: Math.max(s.lon, pt.lon),
-    });
-  };
 
-  const windArrows = useMemo(() => {
-    if (!overlays.wind || !uGrid || !vGrid) return [];
-    const arrows = [];
-    for (let r = 1; r < NLAT; r += 3) {
-      for (let c = 1; c < NLON; c += 3) {
-        const u = uGrid[r][c];
-        const v = vGrid[r][c];
-        const mag = Math.hypot(u, v);
-        if (mag < 0.25) continue;
-        const x1 = lonToX(LON_MIN + c);
-        const y1 = latToY(LAT_MIN + r);
-        const scale = Math.min(18, 4 + mag * 1.1) / mag;
-        const x2 = x1 + u * scale;
-        const y2 = y1 - v * scale;
-        arrows.push({ key: `${r}-${c}`, x1, y1, x2, y2 });
-      }
+    if (allowDraw && start.dragged) {
+      onDrawBoxCommit({
+        latMin: Math.min(start.pt.lat, pt.lat),
+        latMax: Math.max(start.pt.lat, pt.lat),
+        lonMin: Math.min(start.pt.lon, pt.lon),
+        lonMax: Math.max(start.pt.lon, pt.lon),
+      });
+    } else {
+      onSelectTarget({ type: "cell", r: pt.r, c: pt.c, lat: pt.lat, lon: pt.lon });
     }
-    return arrows;
-  }, [overlays.wind, uGrid, vGrid]);
+  };
 
   const activeBox = dragPreview || (overlays.shockBox ? shockBox : null);
   const hoverVal = hoverCell && grid ? grid[hoverCell.r]?.[hoverCell.c] : null;
   const hoverTempVal = hoverCell && tempGridK ? tempGridK[hoverCell.r]?.[hoverCell.c] : null;
+  const hoverFluxMag =
+    hoverCell && fluxUGrid && fluxVGrid
+      ? Math.hypot(fluxUGrid[hoverCell.r][hoverCell.c], fluxVGrid[hoverCell.r][hoverCell.c])
+      : null;
+
+  const selectedCellCoords = useMemo(() => {
+    if (selectedTarget?.type === "cell") {
+      return { r: selectedTarget.r, c: selectedTarget.c };
+    }
+    if (selectedTarget?.type === "city") {
+      return {
+        r: clampGridIndex(selectedTarget.lat - LAT_MIN, NLAT - 1),
+        c: clampGridIndex(selectedTarget.lon - LON_MIN, NLON - 1),
+      };
+    }
+    return null;
+  }, [selectedTarget]);
 
   return (
     <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
-      <div className="mb-2.5 flex min-h-[38px] items-start justify-between gap-2">
+      <div className="mb-2.5 flex min-h-[42px] items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-xs font-bold text-slate-900">{title}</h3>
           <p className="text-[11px] text-slate-500">{subtitle}</p>
@@ -170,6 +304,11 @@ function MapCard({
                     : `${(hoverTempVal - 273.15).toFixed(1)}°C (${hoverTempVal.toFixed(1)} K)`}
                 </span>
               )}
+              {overlays.moistureFlux && hoverFluxMag != null && (
+                <span className="ml-1.5 text-teal-700">
+                  • IVT {hoverFluxMag.toFixed(0)}
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -183,6 +322,14 @@ function MapCard({
           className="block h-full w-full"
         />
 
+        <StreamlineCanvas
+          active={overlays.wind || overlays.moistureFlux}
+          uGrid={overlays.moistureFlux ? fluxUGrid : uGrid}
+          vGrid={overlays.moistureFlux ? fluxVGrid : vGrid}
+          isFlux={overlays.moistureFlux}
+          isDiff={isDiff}
+        />
+
         <svg
           ref={svgRef}
           viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
@@ -191,7 +338,7 @@ function MapCard({
           onPointerUp={handlePointerUp}
           onPointerLeave={() => onHoverCell(null)}
           className={`absolute inset-0 h-full w-full select-none ${
-            allowDraw ? "cursor-crosshair" : "cursor-default"
+            allowDraw ? "cursor-crosshair" : "cursor-pointer"
           }`}
         >
           {/* Lat/Lon subtle graticule */}
@@ -251,41 +398,30 @@ function MapCard({
             </g>
           )}
 
-          {/* Wind Vector Arrows */}
-          {windArrows.map((a) => {
-            const dx = a.x2 - a.x1;
-            const dy = a.y2 - a.y1;
-            const len = Math.hypot(dx, dy);
-            const ux = dx / len;
-            const uy = dy / len;
-            const head = 3.2;
-            const hx1 = a.x2 - ux * head - uy * (head * 0.55);
-            const hy1 = a.y2 - uy * head + ux * (head * 0.55);
-            const hx2 = a.x2 - ux * head + uy * (head * 0.55);
-            const hy2 = a.y2 - uy * head - ux * (head * 0.55);
-            return (
-              <g key={a.key} stroke="rgba(15,23,42,0.72)" strokeWidth="0.95" strokeLinecap="round">
-                <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} />
-                <line x1={a.x2} y1={a.y2} x2={hx1} y2={hy1} />
-                <line x1={a.x2} y1={a.y2} x2={hx2} y2={hy2} />
-              </g>
-            );
-          })}
-
-          {/* Reference Cities with collision-free offsets */}
+          {/* Reference Cities (clickable to focus time-series chart) */}
           {overlays.cities &&
             REFERENCE_CITIES.map((city) => {
               const cx = lonToX(city.lon);
               const cy = latToY(city.lat);
+              const isSelected =
+                selectedTarget?.type === "city" && selectedTarget.name === city.name;
               return (
-                <g key={city.name}>
+                <g
+                  key={city.name}
+                  className="cursor-pointer"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectTarget({ type: "city", ...city });
+                  }}
+                >
                   <circle
                     cx={cx}
                     cy={cy}
-                    r="2.4"
-                    fill="#ea580c"
+                    r={isSelected ? "3.6" : "2.5"}
+                    fill={isSelected ? "#0284c7" : "#ea580c"}
                     stroke="#ffffff"
-                    strokeWidth="1.0"
+                    strokeWidth="1.1"
                   />
                   <text
                     x={cx + city.dx}
@@ -293,9 +429,9 @@ function MapCard({
                     textAnchor={city.anchor}
                     fontSize="8.5"
                     fontWeight="700"
-                    fill="#0f172a"
+                    fill={isSelected ? "#0369a1" : "#0f172a"}
                     paintOrder="stroke"
-                    stroke="rgba(255,255,255,0.9)"
+                    stroke="rgba(255,255,255,0.92)"
                     strokeWidth="2.4"
                   >
                     {city.name}
@@ -318,6 +454,19 @@ function MapCard({
             />
           )}
 
+          {/* Selected Time-Series Cell Marker */}
+          {selectedCellCoords && (
+            <rect
+              x={selectedCellCoords.c * CELL_PX}
+              y={(NLAT - 1 - selectedCellCoords.r) * CELL_PX}
+              width={CELL_PX}
+              height={CELL_PX}
+              fill="rgba(2,132,199,0.18)"
+              stroke="#0284c7"
+              strokeWidth="1.6"
+            />
+          )}
+
           {/* Hover Cell Highlight */}
           {hoverCell && (
             <rect
@@ -325,9 +474,9 @@ function MapCard({
               y={(NLAT - 1 - hoverCell.r) * CELL_PX}
               width={CELL_PX}
               height={CELL_PX}
-              fill="rgba(2,132,199,0.12)"
+              fill="rgba(2,132,199,0.10)"
               stroke="#0284c7"
-              strokeWidth="1.4"
+              strokeWidth="1.2"
             />
           )}
         </svg>
@@ -346,6 +495,15 @@ function MapCard({
   );
 }
 
+function computeFluxPair(rollDay) {
+  const u = rollDay[2];
+  const v = rollDay[3];
+  const tcwv = rollDay[5];
+  const fu = u.map((row, r) => row.map((uv, c) => uv * tcwv[r][c]));
+  const fv = v.map((row, r) => row.map((vv, c) => vv * tcwv[r][c]));
+  return { fu, fv };
+}
+
 export default function MapPanel({
   primeRollout,
   multiRollout,
@@ -354,6 +512,8 @@ export default function MapPanel({
   overlays,
   shockBox,
   onDrawBoxCommit,
+  selectedTarget,
+  onSelectTarget,
   hoverCell,
   onHoverCell,
 }) {
@@ -391,6 +551,11 @@ export default function MapPanel({
     const diffU = multiU.map((row, r) => row.map((v, c) => v - primeU[r][c]));
     const diffV = multiV.map((row, r) => row.map((v, c) => v - primeV[r][c]));
 
+    const primeFlux = computeFluxPair(primeRollout[dayIdx]);
+    const multiFlux = computeFluxPair(multiRollout[dayIdx]);
+    const diffFluxU = multiFlux.fu.map((row, r) => row.map((v, c) => v - primeFlux.fu[r][c]));
+    const diffFluxV = multiFlux.fv.map((row, r) => row.map((v, c) => v - primeFlux.fv[r][c]));
+
     return {
       primeDisp,
       multiDisp,
@@ -407,6 +572,10 @@ export default function MapPanel({
       multiV,
       diffU,
       diffV,
+      primeFlux,
+      multiFlux,
+      diffFluxU,
+      diffFluxV,
     };
   }, [primeRollout, multiRollout, dayIdx, channel]);
 
@@ -427,6 +596,8 @@ export default function MapPanel({
         tempGridK={fields.primeTempK}
         uGrid={fields.primeU}
         vGrid={fields.primeV}
+        fluxUGrid={fields.primeFlux.fu}
+        fluxVGrid={fields.primeFlux.fv}
         vmin={fields.vmin}
         vmax={fields.vmax}
         colormap={channel.colormap}
@@ -434,6 +605,8 @@ export default function MapPanel({
         shockBox={shockBox}
         allowDraw={true}
         onDrawBoxCommit={onDrawBoxCommit}
+        onSelectTarget={onSelectTarget}
+        selectedTarget={selectedTarget}
         hoverCell={hoverCell}
         onHoverCell={onHoverCell}
         dragPreview={dragPreview}
@@ -448,6 +621,8 @@ export default function MapPanel({
         tempGridK={fields.multiTempK}
         uGrid={fields.multiU}
         vGrid={fields.multiV}
+        fluxUGrid={fields.multiFlux.fu}
+        fluxVGrid={fields.multiFlux.fv}
         vmin={fields.vmin}
         vmax={fields.vmax}
         colormap={channel.colormap}
@@ -455,6 +630,8 @@ export default function MapPanel({
         shockBox={shockBox}
         allowDraw={true}
         onDrawBoxCommit={onDrawBoxCommit}
+        onSelectTarget={onSelectTarget}
+        selectedTarget={selectedTarget}
         hoverCell={hoverCell}
         onHoverCell={onHoverCell}
         dragPreview={dragPreview}
@@ -469,6 +646,8 @@ export default function MapPanel({
         tempGridK={fields.diffTempK}
         uGrid={fields.diffU}
         vGrid={fields.diffV}
+        fluxUGrid={fields.diffFluxU}
+        fluxVGrid={fields.diffFluxV}
         vmin={-fields.dmax}
         vmax={fields.dmax}
         colormap="rdbu_r"
@@ -476,6 +655,8 @@ export default function MapPanel({
         shockBox={shockBox}
         allowDraw={false}
         onDrawBoxCommit={onDrawBoxCommit}
+        onSelectTarget={onSelectTarget}
+        selectedTarget={selectedTarget}
         hoverCell={hoverCell}
         onHoverCell={onHoverCell}
         dragPreview={dragPreview}

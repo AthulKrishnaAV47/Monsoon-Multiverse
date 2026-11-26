@@ -11,6 +11,8 @@ import {
   Database,
   FileCode2,
   X,
+  Droplets,
+  GitBranch,
 } from "lucide-react";
 import {
   CHANNELS,
@@ -48,6 +50,8 @@ export default function ControlSidebar({
   onPastePertJson,
   onClearRawPert,
   onRunCustomNow,
+  onRunEnsemble,
+  ensembleLoading,
   overlays,
   onOverlaysChange,
 }) {
@@ -320,6 +324,18 @@ export default function ControlSidebar({
               <Wind className="h-3 w-3 text-sky-600" />
               <span className="text-slate-700">Wind (u/v)</span>
             </label>
+            <label className="col-span-2 flex cursor-pointer items-center gap-1.5 rounded-md bg-teal-50/60 px-2.5 py-1.5 ring-1 ring-teal-200">
+              <input
+                type="checkbox"
+                checked={overlays.moistureFlux}
+                onChange={(e) =>
+                  onOverlaysChange({ ...overlays, moistureFlux: e.target.checked })
+                }
+                className="accent-teal-600"
+              />
+              <Droplets className="h-3.5 w-3.5 text-teal-600" />
+              <span className="font-medium text-teal-900">Moisture Flux (tcwv × V)</span>
+            </label>
             <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200">
               <input
                 type="checkbox"
@@ -347,10 +363,21 @@ export default function ControlSidebar({
 
       {/* Multiverse Shock Scenarios */}
       <section className="space-y-2.5">
-        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-          <Zap className="h-3.5 w-3.5 text-orange-500" />
-          Multiverse Shock Scenarios
-        </h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <Zap className="h-3.5 w-3.5 text-orange-500" />
+            Multiverse Shock Scenarios
+          </h2>
+          <button
+            onClick={onRunEnsemble}
+            disabled={ensembleLoading}
+            className="flex items-center gap-1 rounded-md bg-sky-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-50"
+            title="Run 5 jittered perturbation members (0.85x–1.15x) to visualize forecast spread"
+          >
+            <GitBranch className="h-3 w-3" />
+            <span>{ensembleLoading ? "Running..." : "5-Member Ensemble"}</span>
+          </button>
+        </div>
 
         <div className="space-y-1.5">
           {SHOCK_PRESETS.map((preset) => {
@@ -408,7 +435,6 @@ export default function ControlSidebar({
               </div>
             )}
 
-            {/* Channel Selection & Magnitude Sliders */}
             <div className="space-y-2">
               <div className="text-[11px] font-medium text-slate-600">
                 Target Channels (Raw Physical Units on Day 0)
@@ -469,7 +495,6 @@ export default function ControlSidebar({
               })}
             </div>
 
-            {/* Bounding Box Controls (Synced with Map Drag) */}
             <div className="space-y-2 border-t border-slate-200 pt-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-medium text-slate-600">
@@ -496,7 +521,7 @@ export default function ControlSidebar({
               </div>
 
               <p className="text-[10px] text-slate-500">
-                Click & drag directly on Prime or Multiverse maps, or enter bounds:
+                Drag on Prime/Multiverse maps for a box (or click a cell to inspect time-series):
               </p>
 
               {boxMode === "grid" ? (
@@ -619,7 +644,6 @@ export default function ControlSidebar({
               </div>
             </div>
 
-            {/* Upload / Paste [6, 32, 36] Perturbation JSON */}
             <input
               ref={pertFileRef}
               type="file"
@@ -650,7 +674,7 @@ export default function ControlSidebar({
                   rows={3}
                   value={pertPasteText}
                   onChange={(e) => setPertPasteText(e.target.value)}
-                  placeholder="Paste [6, 32, 36] array or {&quot;perturbation&quot;: [...]}"
+                  placeholder='Paste [6, 32, 36] array or {"perturbation": [...]}'
                   className="w-full rounded border border-slate-300 bg-slate-50 p-1.5 font-mono text-[11px] text-slate-800 outline-none focus:border-orange-500"
                 />
                 <div className="flex justify-end gap-1.5">

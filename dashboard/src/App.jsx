@@ -14,8 +14,10 @@ import {
   validatePerturbationPayload,
 } from "./data/presets";
 import {
+  buildEnsemblePerturbations,
   computeImpactMetrics,
   computeMaxCausalRipple,
+  computePhysicsTelemetry,
   computeTemperatureSummary,
 } from "./utils/metrics";
 import TopBar from "./components/TopBar";
@@ -23,6 +25,7 @@ import ControlSidebar from "./components/ControlSidebar";
 import TimelineBar from "./components/TimelineBar";
 import MapPanel from "./components/MapPanel";
 import ImpactStrip from "./components/ImpactStrip";
+import EnsembleChartPanel from "./components/EnsembleChartPanel";
 
 export default function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -38,7 +41,8 @@ export default function App() {
 
   const [steps, setSteps] = useState(10);
   const [dayIdx, setDayIdx] = useState(3);
-  const [channelIdx, setChannelIdx] = useState(0); // Default: t2m (Temperature) for immediate thermal visibility
+  const [channelIdx, setChannelIdx] = useState(0); // Default: t2m (Temperature)
+  const [chartChannel, setChartChannel] = useState("tp");
 
   const [presetId, setPresetId] = useState("warm_bob");
   const [customShock, setCustomShock] = useState(createInitialCustomShock);
@@ -48,10 +52,12 @@ export default function App() {
   const [overlays, setOverlays] = useState({
     borders: true,
     wind: true,
+    moistureFlux: true,
     cities: true,
     shockBox: true,
   });
 
+  const [selectedTarget, setSelectedTarget] = useState({ type: "box" });
   const [hoverCell, setHoverCell] = useState(null);
 
   const [primeRollout, setPrimeRollout] = useState(null);
@@ -61,8 +67,15 @@ export default function App() {
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState(null);
 
+  const [ensembleState, setEnsembleState] = useState({
+    loading: false,
+    rollouts: null,
+    avgMs: null,
+    stale: false,
+  });
+
   const [playing, setPlaying] = useState(false);
-  const [speedMs, setSpeedMs] = useState(600);
+  const [speedMs, setSpeedMs] = useState(650);
 
   const [detResult, setDetResult] = useState(null);
   const [detLoading, setDetLoading] = useState(false);
@@ -150,7 +163,6 @@ export default function App() {
     setDayIdx((prev) => Math.min(prev, Math.max(0, newSteps - 1)));
   }, []);
 
-  // Strictly match scrubber horizon to the actual simulated rollout steps
   const effectiveSteps = useMemo(() => {
     if (primeRollout && multiRollout) {
       return Math.min(primeRollout.length, multiRollout.length);
@@ -185,6 +197,17 @@ export default function App() {
     const lastState = initStates[initStates.length - 1];
     return activePreset.build(lastState, debouncedCustomShock);
   }, [initStates, activePreset, debouncedCustomShock]);
+
+  // Clear ensemble if horizon/initStates change; mark stale if only perturbation changes
+  useEffect(() => {
+    setEnsembleState((prev) => {
+      if (!prev.rollouts) return prev;
+      if (prev.rollouts[0]?.length !== steps) {
+        return { loading: false, rollouts: null, avgMs: null, stale: false };
+      }
+      return { ...prev, stale: true };
+    });
+  }, [initStates, steps, perturbation]);
 
   // Timeline Prime
   useEffect(() => {
@@ -237,6 +260,27 @@ export default function App() {
     };
   }, [apiUrl, initStates, doySincos, steps, perturbation, customRunNonce]);
 
+  const handleRunEnsemble = useCallback(async () => {
+    if (!initStates || !doySincos || !perturbation) return;
+    setEnsembleState((prev) => ({ ...prev, loading: true }));
+    setSimError(null);
+    try {
+      const members = buildEnsemblePerturbations(perturbation);
+      const responses = await Promise.all(
+        members.map((memPert) =>
+          runSimulate(apiUrl, { initStates, doySincos, steps, perturbation: memPert })
+        )
+      );
+      const rollouts = responses.map((r) => r.rollout);
+      const avgMs =
+        responses.reduce((acc, r) => acc + (r.inference_ms || 0), 0) / responses.length;
+      setEnsembleState({ loading: false, rollouts, avgMs, stale: false });
+    } catch (err) {
+      setSimError(`Ensemble failed: ${err.message}`);
+      setEnsembleState((prev) => ({ ...prev, loading: false }));
+    }
+  }, [apiUrl, initStates, doySincos, steps, perturbation]);
+
   const handleDrawBoxCommit = useCallback((box) => {
     setPresetId("custom");
     setCustomShock((prev) => {
@@ -277,13 +321,25 @@ export default function App() {
     [primeRollout, multiRollout]
   );
 
+  const physicsTelemetry = useMemo(
+    () => computePhysicsTelemetry(primeRollout, multiRollout),
+    [primeRollout, multiRollout]
+  );
+
   const metrics = useMemo(
     () => computeImpactMetrics(primeRollout, multiRollout, safeDayIdx),
     [primeRollout, multiRollout, safeDayIdx]
   );
 
   const tempStats = useMemo(
-    () => computeTemperatureSummary(primeRollout, multiRollout, safeDayIdx, activeShockBox, hoverCell),
+    () =>
+      computeTemperatureSummary(
+        primeRollout,
+        multiRollout,
+        safeDayIdx,
+        activeShockBox,
+        hoverCell
+      ),
     [primeRollout, multiRollout, safeDayIdx, activeShockBox, hoverCell]
   );
 
@@ -298,6 +354,7 @@ export default function App() {
         primeMs={primeMs}
         multiMs={multiMs}
         maxRipple={maxRipple}
+        physicsTelemetry={physicsTelemetry}
         detResult={detResult}
         detLoading={detLoading}
         onVerifyDeterminism={handleVerifyDeterminism}
@@ -325,11 +382,13 @@ export default function App() {
           onPastePertJson={applyCustomPertJson}
           onClearRawPert={handleClearRawPert}
           onRunCustomNow={handleRunCustomNow}
+          onRunEnsemble={handleRunEnsemble}
+          ensembleLoading={ensembleState.loading}
           overlays={overlays}
           onOverlaysChange={setOverlays}
         />
 
-        <main className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 lg:p-5">
+        <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4 lg:p-5">
           {simError && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-800">
               <strong>Inference / Data Error:</strong> {simError} — Ensure{" "}
@@ -363,6 +422,8 @@ export default function App() {
             overlays={overlays}
             shockBox={activeShockBox}
             onDrawBoxCommit={handleDrawBoxCommit}
+            selectedTarget={selectedTarget}
+            onSelectTarget={setSelectedTarget}
             hoverCell={hoverCell}
             onHoverCell={setHoverCell}
           />
@@ -372,6 +433,19 @@ export default function App() {
             tempStats={tempStats}
             dayIdx={safeDayIdx}
             steps={effectiveSteps}
+          />
+
+          <EnsembleChartPanel
+            primeRollout={primeRollout}
+            multiRollout={multiRollout}
+            ensembleState={ensembleState}
+            onRunEnsemble={handleRunEnsemble}
+            selectedTarget={selectedTarget}
+            onSelectTarget={setSelectedTarget}
+            shockBox={activeShockBox}
+            chartChannel={chartChannel}
+            onChartChannelChange={setChartChannel}
+            dayIdx={safeDayIdx}
           />
         </main>
       </div>

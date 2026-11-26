@@ -1,5 +1,13 @@
 import React from "react";
-import { Activity, CheckCircle2, Cpu, ShieldCheck, AlertTriangle, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Cpu,
+  ShieldCheck,
+  AlertTriangle,
+  RefreshCw,
+  Atom,
+} from "lucide-react";
 
 export default function TopBar({
   health,
@@ -8,14 +16,19 @@ export default function TopBar({
   primeMs,
   multiMs,
   maxRipple,
+  physicsTelemetry,
   detResult,
   detLoading,
   onVerifyDeterminism,
 }) {
   const isOnline = health?.status === "ready";
+  const physOk =
+    physicsTelemetry &&
+    physicsTelemetry.finitePass &&
+    physicsTelemetry.nonNegativeRainPass;
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-3 shadow-sm">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-3 shadow-sm">
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white shadow-sm">
           <Activity className="h-5 w-5" />
@@ -35,7 +48,7 @@ export default function TopBar({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2.5 text-xs">
         {isOnline ? (
           <div className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 font-medium text-emerald-700 ring-1 ring-emerald-200">
             <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
@@ -53,7 +66,8 @@ export default function TopBar({
           </button>
         )}
 
-        <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 px-3.5 py-1.5 font-mono text-slate-700 ring-1 ring-slate-200">
+        {/* Latency & Causal Ripple */}
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg bg-slate-50 px-3 py-1.5 font-mono text-slate-700 ring-1 ring-slate-200">
           <div className="flex items-center gap-1.5">
             <Cpu className="h-3.5 w-3.5 text-sky-600" />
             <span className="text-slate-500">Prime:</span>
@@ -79,6 +93,37 @@ export default function TopBar({
             </span>
           </div>
         </div>
+
+        {/* Live Physics & Stability Telemetry Badge */}
+        {physicsTelemetry && (
+          <div
+            className={`flex flex-wrap items-center gap-2 rounded-lg px-3 py-1.5 font-mono text-[11px] ring-1 ${
+              physOk
+                ? "bg-teal-50/80 text-teal-900 ring-teal-200"
+                : "bg-rose-50 text-rose-900 ring-rose-200"
+            }`}
+            aria-label="Physics Stability Telemetry"
+          >
+            <Atom className={`h-3.5 w-3.5 ${physOk ? "text-teal-700" : "text-rose-600"}`} />
+            <span className="font-semibold">
+              Physics: {physOk ? "PASS" : "WARN"}
+            </span>
+            <span className="text-slate-400">•</span>
+            <span>{physicsTelemetry.nonFiniteCount} NaN/Inf</span>
+            <span className="text-slate-400">•</span>
+            <span>min(tp)={physicsTelemetry.minRain.toFixed(2)} mm/d</span>
+            <span className="text-slate-400">•</span>
+            <span title={`Domain mean shift Day 1 to Day ${physicsTelemetry.stepsChecked}`}>
+              Δmsl {physicsTelemetry.mslDriftHpa >= 0 ? "+" : ""}
+              {physicsTelemetry.mslDriftHpa.toFixed(2)} hPa
+            </span>
+            <span className="text-slate-400">|</span>
+            <span title={`Domain mean shift Day 1 to Day ${physicsTelemetry.stepsChecked}`}>
+              Δtcwv {physicsTelemetry.tcwvDrift >= 0 ? "+" : ""}
+              {physicsTelemetry.tcwvDrift.toFixed(2)} kg/m²
+            </span>
+          </div>
+        )}
 
         <button
           onClick={onVerifyDeterminism}

@@ -70,8 +70,8 @@ export default function TimelineBar({
         <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1 ring-1 ring-slate-200 text-[11px]">
           {[
             { label: "0.5x", ms: 1100 },
-            { label: "1x", ms: 600 },
-            { label: "2x", ms: 300 },
+            { label: "1x", ms: 650 },
+            { label: "2x", ms: 320 },
           ].map((opt) => (
             <button
               key={opt.label}
