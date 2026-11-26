@@ -39,7 +39,10 @@ def main() -> int:
     clim = S_stats.climatology(train_data, train_dates)  # [366, 6, 32, 36]
 
     stats = json.loads(Path("model/artifacts/stats.json").read_text())
-    raw_std = np.array(stats["raw_std"], dtype=np.float32)
+    raw_std = np.array(
+        stats.get("raw_std", train_data.std(axis=(0, 2, 3))),
+        dtype=np.float32,
+    )
 
     steps = 10
     max_start = len(test_data) - C.T_IN - steps
