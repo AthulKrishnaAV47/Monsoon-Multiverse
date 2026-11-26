@@ -12,7 +12,6 @@ function lonToX(lon) {
 }
 
 function latToY(lat) {
-  // Lat index 31 (37.5N) is at top (y=0); lat index 0 (6.5N) is at bottom (y=CANVAS_H)
   return (((LAT_MAX + 0.5) - lat) / NLAT) * CANVAS_H;
 }
 
@@ -24,6 +23,7 @@ function MapCard({
   title,
   subtitle,
   grid,
+  tempGridK,
   uGrid,
   vGrid,
   vmin,
@@ -44,7 +44,6 @@ function MapCard({
   const svgRef = useRef(null);
   const dragStartRef = useRef(null);
 
-  // Render 32x36 weather field onto canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !grid) return;
@@ -55,11 +54,10 @@ function MapCard({
     off.height = NLAT;
     const offCtx = off.getContext("2d");
     const img = offCtx.createImageData(NLON, NLAT);
-    const lut = LUTS[colormap] || LUTS.viridis;
+    const lut = LUTS[colormap] || LUTS.accu_temp;
     const span = Math.max(vmax - vmin, 1e-6);
 
     for (let r = 0; r < NLAT; r++) {
-      // Flip vertically: r=31 (north) -> y=0
       const y = NLAT - 1 - r;
       for (let c = 0; c < NLON; c++) {
         const val = grid[r][c];
@@ -74,7 +72,9 @@ function MapCard({
     }
     offCtx.putImageData(img, 0, 0);
 
-    ctx.imageSmoothingEnabled = false;
+    // Smooth AccuWeather radar-style interpolation while preserving exact grid indices
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     ctx.drawImage(off, 0, 0, CANVAS_W, CANVAS_H);
   }, [grid, vmin, vmax, colormap]);
@@ -137,7 +137,7 @@ function MapCard({
         const y1 = latToY(LAT_MIN + r);
         const scale = Math.min(18, 4 + mag * 1.1) / mag;
         const x2 = x1 + u * scale;
-        const y2 = y1 - v * scale; // north (+v) is up (-y)
+        const y2 = y1 - v * scale;
         arrows.push({ key: `${r}-${c}`, x1, y1, x2, y2 });
       }
     }
@@ -145,30 +145,42 @@ function MapCard({
   }, [overlays.wind, uGrid, vGrid]);
 
   const activeBox = dragPreview || (overlays.shockBox ? shockBox : null);
-  const hoverVal =
-    hoverCell && grid ? grid[hoverCell.r]?.[hoverCell.c] : null;
+  const hoverVal = hoverCell && grid ? grid[hoverCell.r]?.[hoverCell.c] : null;
+  const hoverTempVal = hoverCell && tempGridK ? tempGridK[hoverCell.r]?.[hoverCell.c] : null;
 
   return (
-    <div className="flex flex-col rounded-xl border border-slate-800/80 bg-slate-900/70 p-3">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <div>
-          <h3 className="text-xs font-semibold text-slate-100">{title}</h3>
-          <p className="text-[11px] text-slate-400">{subtitle}</p>
+    <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className="mb-2.5 flex min-h-[38px] items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-xs font-bold text-slate-900">{title}</h3>
+          <p className="text-[11px] text-slate-500">{subtitle}</p>
         </div>
         {hoverCell && hoverVal != null && (
-          <span className="rounded bg-slate-950 px-2 py-0.5 font-mono text-[11px] text-cyan-300 ring-1 ring-slate-800">
-            [{hoverCell.r},{hoverCell.c}] {hoverCell.lat.toFixed(1)}°N {hoverCell.lon.toFixed(1)}°E:{" "}
-            {isDiff && hoverVal > 0 ? `+${hoverVal.toFixed(2)}` : hoverVal.toFixed(2)} {unit}
-          </span>
+          <div className="shrink-0 rounded-md bg-slate-50 px-2 py-1 text-right font-mono text-[10px] leading-tight text-slate-800 ring-1 ring-slate-200">
+            <div className="font-semibold text-sky-700">
+              [{hoverCell.r},{hoverCell.c}] {hoverCell.lat.toFixed(1)}°N {hoverCell.lon.toFixed(1)}°E
+            </div>
+            <div>
+              {isDiff && hoverVal > 0 ? `+${hoverVal.toFixed(2)}` : hoverVal.toFixed(2)} {unit}
+              {hoverTempVal != null && (
+                <span className="ml-1.5 text-orange-700">
+                  •{" "}
+                  {isDiff
+                    ? `${hoverTempVal > 0 ? "+" : ""}${hoverTempVal.toFixed(2)} K`
+                    : `${(hoverTempVal - 273.15).toFixed(1)}°C (${hoverTempVal.toFixed(1)} K)`}
+                </span>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
-      <div className="relative aspect-[36/32] w-full overflow-hidden rounded-lg bg-slate-950 ring-1 ring-slate-800">
+      <div className="relative aspect-[36/32] w-full overflow-hidden rounded-lg bg-sky-50 ring-1 ring-slate-200">
         <canvas
           ref={canvasRef}
           width={CANVAS_W}
           height={CANVAS_H}
-          className="h-full w-full block"
+          className="block h-full w-full"
         />
 
         <svg
@@ -182,7 +194,7 @@ function MapCard({
             allowDraw ? "cursor-crosshair" : "cursor-default"
           }`}
         >
-          {/* Lat/Lon subtle gridlines every 5 deg */}
+          {/* Lat/Lon subtle graticule */}
           {[10, 15, 20, 25, 30, 35].map((lat) => (
             <line
               key={`lat-${lat}`}
@@ -190,9 +202,9 @@ function MapCard({
               x2={CANVAS_W}
               y1={latToY(lat)}
               y2={latToY(lat)}
-              stroke="rgba(148,163,184,0.16)"
+              stroke="rgba(15,23,42,0.12)"
               strokeDasharray="2 3"
-              strokeWidth="0.7"
+              strokeWidth="0.65"
             />
           ))}
           {[70, 75, 80, 85, 90, 95, 100].map((lon) => (
@@ -202,9 +214,9 @@ function MapCard({
               y2={CANVAS_H}
               x1={lonToX(lon)}
               x2={lonToX(lon)}
-              stroke="rgba(148,163,184,0.16)"
+              stroke="rgba(15,23,42,0.12)"
               strokeDasharray="2 3"
-              strokeWidth="0.7"
+              strokeWidth="0.65"
             />
           ))}
 
@@ -215,15 +227,23 @@ function MapCard({
                 <polyline
                   key={`coast-${idx}`}
                   points={polylineToPoints(line)}
-                  stroke={isDiff ? "rgba(15,23,42,0.75)" : "rgba(248,250,252,0.75)"}
-                  strokeWidth="1.25"
+                  stroke="rgba(255,255,255,0.7)"
+                  strokeWidth="2.2"
+                />
+              ))}
+              {COASTLINE_POLYLINES.map((line, idx) => (
+                <polyline
+                  key={`coast-ink-${idx}`}
+                  points={polylineToPoints(line)}
+                  stroke="#1e293b"
+                  strokeWidth="1.15"
                 />
               ))}
               {INDIA_LAND_BORDERS.map((line, idx) => (
                 <polyline
                   key={`border-${idx}`}
                   points={polylineToPoints(line)}
-                  stroke={isDiff ? "rgba(15,23,42,0.55)" : "rgba(226,232,240,0.55)"}
+                  stroke="#334155"
                   strokeDasharray="3 2"
                   strokeWidth="1.05"
                 />
@@ -243,9 +263,8 @@ function MapCard({
             const hy1 = a.y2 - uy * head + ux * (head * 0.55);
             const hx2 = a.x2 - ux * head + uy * (head * 0.55);
             const hy2 = a.y2 - uy * head - ux * (head * 0.55);
-            const stroke = isDiff ? "rgba(15,23,42,0.75)" : "rgba(255,255,255,0.78)";
             return (
-              <g key={a.key} stroke={stroke} strokeWidth="0.95" strokeLinecap="round">
+              <g key={a.key} stroke="rgba(15,23,42,0.72)" strokeWidth="0.95" strokeLinecap="round">
                 <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} />
                 <line x1={a.x2} y1={a.y2} x2={hx1} y2={hy1} />
                 <line x1={a.x2} y1={a.y2} x2={hx2} y2={hy2} />
@@ -253,7 +272,7 @@ function MapCard({
             );
           })}
 
-          {/* Reference Cities */}
+          {/* Reference Cities with collision-free offsets */}
           {overlays.cities &&
             REFERENCE_CITIES.map((city) => {
               const cx = lonToX(city.lon);
@@ -264,19 +283,20 @@ function MapCard({
                     cx={cx}
                     cy={cy}
                     r="2.4"
-                    fill="#fbbf24"
-                    stroke="#020617"
-                    strokeWidth="0.8"
+                    fill="#ea580c"
+                    stroke="#ffffff"
+                    strokeWidth="1.0"
                   />
                   <text
-                    x={cx + 4}
-                    y={cy + 3}
+                    x={cx + city.dx}
+                    y={cy + city.dy}
+                    textAnchor={city.anchor}
                     fontSize="8.5"
-                    fontWeight="600"
-                    fill={isDiff ? "#0f172a" : "#f8fafc"}
+                    fontWeight="700"
+                    fill="#0f172a"
                     paintOrder="stroke"
-                    stroke={isDiff ? "rgba(255,255,255,0.7)" : "rgba(2,6,23,0.85)"}
-                    strokeWidth="2"
+                    stroke="rgba(255,255,255,0.9)"
+                    strokeWidth="2.4"
                   >
                     {city.name}
                   </text>
@@ -291,9 +311,9 @@ function MapCard({
               y={latToY(activeBox.latMax + 0.5)}
               width={Math.max(CELL_PX, lonToX(activeBox.lonMax + 0.5) - lonToX(activeBox.lonMin - 0.5))}
               height={Math.max(CELL_PX, latToY(activeBox.latMin - 0.5) - latToY(activeBox.latMax + 0.5))}
-              fill={dragPreview ? "rgba(251,191,36,0.22)" : "rgba(251,191,36,0.08)"}
-              stroke="#fbbf24"
-              strokeWidth="1.6"
+              fill={dragPreview ? "rgba(234,88,12,0.22)" : "rgba(234,88,12,0.08)"}
+              stroke="#ea580c"
+              strokeWidth="1.75"
               strokeDasharray="4 2"
             />
           )}
@@ -305,19 +325,19 @@ function MapCard({
               y={(NLAT - 1 - hoverCell.r) * CELL_PX}
               width={CELL_PX}
               height={CELL_PX}
-              fill="none"
-              stroke="#22d3ee"
-              strokeWidth="1.2"
+              fill="rgba(2,132,199,0.12)"
+              stroke="#0284c7"
+              strokeWidth="1.4"
             />
           )}
         </svg>
       </div>
 
       {/* Colorbar */}
-      <div className="mt-2 flex items-center gap-2 font-mono text-[10px] text-slate-400">
+      <div className="mt-2.5 flex items-center gap-2 font-mono text-[10px] font-medium text-slate-600">
         <span className="w-12 text-right">{vmin.toFixed(1)}</span>
         <div
-          className="h-2 flex-1 rounded-full ring-1 ring-slate-700/70"
+          className="h-2.5 flex-1 rounded-full ring-1 ring-slate-300"
           style={{ background: cssGradient(colormap) }}
         />
         <span className="w-12">{vmax.toFixed(1)}</span>
@@ -334,8 +354,9 @@ export default function MapPanel({
   overlays,
   shockBox,
   onDrawBoxCommit,
+  hoverCell,
+  onHoverCell,
 }) {
-  const [hoverCell, setHoverCell] = useState(null);
   const [dragPreview, setDragPreview] = useState(null);
 
   const fields = useMemo(() => {
@@ -348,6 +369,10 @@ export default function MapPanel({
     const multiDisp = multiRaw.map((row) => row.map((v) => channel.toDisplay(v)));
     const diffDisp = multiDisp.map((row, r) => row.map((v, c) => v - primeDisp[r][c]));
 
+    const primeTempK = primeRollout[dayIdx][0];
+    const multiTempK = multiRollout[dayIdx][0];
+    const diffTempK = multiTempK.map((row, r) => row.map((v, c) => v - primeTempK[r][c]));
+
     let vmin = Infinity;
     let vmax = -Infinity;
     let dmax = 1e-4;
@@ -359,7 +384,6 @@ export default function MapPanel({
       }
     }
 
-    // Wind grids (channels 2 = u10, 3 = v10)
     const primeU = primeRollout[dayIdx][2];
     const primeV = primeRollout[dayIdx][3];
     const multiU = multiRollout[dayIdx][2];
@@ -371,6 +395,9 @@ export default function MapPanel({
       primeDisp,
       multiDisp,
       diffDisp,
+      primeTempK,
+      multiTempK,
+      diffTempK,
       vmin,
       vmax,
       dmax,
@@ -385,18 +412,19 @@ export default function MapPanel({
 
   if (!fields) {
     return (
-      <div className="flex h-72 items-center justify-center rounded-xl border border-slate-800 bg-slate-900/40 text-sm text-slate-400">
+      <div className="flex h-72 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm text-slate-500 shadow-sm">
         Waiting for simulation rollout from inference server...
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
       <MapCard
         title={`Timeline Prime • Day ${dayIdx + 1}`}
         subtitle={`${channel.label} (Unperturbed)`}
         grid={fields.primeDisp}
+        tempGridK={fields.primeTempK}
         uGrid={fields.primeU}
         vGrid={fields.primeV}
         vmin={fields.vmin}
@@ -407,7 +435,7 @@ export default function MapPanel({
         allowDraw={true}
         onDrawBoxCommit={onDrawBoxCommit}
         hoverCell={hoverCell}
-        onHoverCell={setHoverCell}
+        onHoverCell={onHoverCell}
         dragPreview={dragPreview}
         onDragPreview={setDragPreview}
         unit={channel.unit}
@@ -417,6 +445,7 @@ export default function MapPanel({
         title={`Multiverse Shocked • Day ${dayIdx + 1}`}
         subtitle={`${channel.label} (Branched)`}
         grid={fields.multiDisp}
+        tempGridK={fields.multiTempK}
         uGrid={fields.multiU}
         vGrid={fields.multiV}
         vmin={fields.vmin}
@@ -427,7 +456,7 @@ export default function MapPanel({
         allowDraw={true}
         onDrawBoxCommit={onDrawBoxCommit}
         hoverCell={hoverCell}
-        onHoverCell={setHoverCell}
+        onHoverCell={onHoverCell}
         dragPreview={dragPreview}
         onDragPreview={setDragPreview}
         unit={channel.unit}
@@ -437,6 +466,7 @@ export default function MapPanel({
         title={`Causal Difference • Day ${dayIdx + 1}`}
         subtitle={`Multiverse − Prime (${channel.unit})`}
         grid={fields.diffDisp}
+        tempGridK={fields.diffTempK}
         uGrid={fields.diffU}
         vGrid={fields.diffV}
         vmin={-fields.dmax}
@@ -447,7 +477,7 @@ export default function MapPanel({
         allowDraw={false}
         onDrawBoxCommit={onDrawBoxCommit}
         hoverCell={hoverCell}
-        onHoverCell={setHoverCell}
+        onHoverCell={onHoverCell}
         dragPreview={dragPreview}
         onDragPreview={setDragPreview}
         unit={channel.unit}

@@ -10,8 +10,14 @@ import {
   CHANNELS,
   SHOCK_PRESETS,
   createInitialCustomShock,
+  validateInitPayload,
+  validatePerturbationPayload,
 } from "./data/presets";
-import { computeImpactMetrics, computeMaxCausalRipple } from "./utils/metrics";
+import {
+  computeImpactMetrics,
+  computeMaxCausalRipple,
+  computeTemperatureSummary,
+} from "./utils/metrics";
 import TopBar from "./components/TopBar";
 import ControlSidebar from "./components/ControlSidebar";
 import TimelineBar from "./components/TimelineBar";
@@ -32,7 +38,7 @@ export default function App() {
 
   const [steps, setSteps] = useState(10);
   const [dayIdx, setDayIdx] = useState(3);
-  const [channelIdx, setChannelIdx] = useState(1); // Default: tp (Daily Precipitation)
+  const [channelIdx, setChannelIdx] = useState(0); // Default: t2m (Temperature) for immediate thermal visibility
 
   const [presetId, setPresetId] = useState("warm_bob");
   const [customShock, setCustomShock] = useState(createInitialCustomShock);
@@ -45,6 +51,8 @@ export default function App() {
     cities: true,
     shockBox: true,
   });
+
+  const [hoverCell, setHoverCell] = useState(null);
 
   const [primeRollout, setPrimeRollout] = useState(null);
   const [multiRollout, setMultiRollout] = useState(null);
@@ -86,29 +94,50 @@ export default function App() {
     }
   }, []);
 
-  const handleUploadInitJson = useCallback((parsed, filename) => {
-    if (!Array.isArray(parsed?.init_states) || !Array.isArray(parsed?.doy_sincos)) {
-      setSimError("Uploaded JSON must contain 'init_states' [3,6,32,36] and 'doy_sincos' [sin,cos].");
-      return;
+  const applyCustomInitJson = useCallback((parsed, label) => {
+    try {
+      const validated = validateInitPayload(parsed);
+      setSimError(null);
+      setBundledId("custom_init");
+      setInitStates(validated.init_states);
+      setDoySincos(validated.doy_sincos);
+      setInitMeta({ label });
+    } catch (err) {
+      setSimError(err.message);
     }
-    setSimError(null);
-    setBundledId("uploaded");
-    setInitStates(parsed.init_states);
-    setDoySincos(parsed.doy_sincos);
-    setInitMeta({ label: filename });
   }, []);
 
-  // Load default bundled window on mount
+  const applyCustomPertJson = useCallback((parsed, label) => {
+    try {
+      const tensor = validatePerturbationPayload(parsed);
+      setSimError(null);
+      setPresetId("custom");
+      setCustomShock((prev) => {
+        const next = { ...prev, rawPerturbation: tensor, rawLabel: label };
+        setDebouncedCustomShock(next);
+        return next;
+      });
+    } catch (err) {
+      setSimError(err.message);
+    }
+  }, []);
+
+  const handleClearRawPert = useCallback(() => {
+    setCustomShock((prev) => {
+      const next = { ...prev, rawPerturbation: null, rawLabel: null };
+      setDebouncedCustomShock(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     loadBundled(BUNDLED_WINDOWS[0]);
   }, [loadBundled]);
 
-  // Check health whenever API URL changes
   useEffect(() => {
     checkHealth();
   }, [checkHealth]);
 
-  // Debounce custom shock edits slightly so slider drags don't flood /simulate
   useEffect(() => {
     const id = setTimeout(() => {
       setDebouncedCustomShock(customShock);
@@ -121,11 +150,16 @@ export default function App() {
     setDayIdx((prev) => Math.min(prev, Math.max(0, newSteps - 1)));
   }, []);
 
-  // Keep effectiveSteps strictly tied to the rendered rollout length so Day X / N always matches
-  const effectiveSteps = primeRollout?.length ?? steps;
+  // Strictly match scrubber horizon to the actual simulated rollout steps
+  const effectiveSteps = useMemo(() => {
+    if (primeRollout && multiRollout) {
+      return Math.min(primeRollout.length, multiRollout.length);
+    }
+    return primeRollout?.length ?? steps;
+  }, [primeRollout, multiRollout, steps]);
+
   const safeDayIdx = Math.min(dayIdx, Math.max(0, effectiveSteps - 1));
 
-  // Animation loop synced to effectiveSteps
   useEffect(() => {
     if (!playing || effectiveSteps <= 1) return;
     const id = setInterval(() => {
@@ -139,20 +173,20 @@ export default function App() {
     [presetId]
   );
 
-  // Active box displayed on map updates immediately while dragging/typing
   const activeShockBox = useMemo(() => {
-    if (presetId === "custom") return customShock.box;
+    if (presetId === "custom") {
+      return customShock.rawPerturbation ? null : customShock.box;
+    }
     return activePreset.box;
-  }, [presetId, activePreset, customShock.box]);
+  }, [presetId, activePreset, customShock.box, customShock.rawPerturbation]);
 
-  // Perturbation sent to /simulate uses debounced customShock (or immediate on Run Now)
   const perturbation = useMemo(() => {
     if (!initStates) return null;
     const lastState = initStates[initStates.length - 1];
     return activePreset.build(lastState, debouncedCustomShock);
   }, [initStates, activePreset, debouncedCustomShock]);
 
-  // Run Timeline Prime (perturbation: null)
+  // Timeline Prime
   useEffect(() => {
     if (!initStates || !doySincos) return;
     let cancelled = false;
@@ -179,7 +213,7 @@ export default function App() {
     };
   }, [apiUrl, initStates, doySincos, steps]);
 
-  // Run Multiverse Shocked (perturbation: [6, 32, 36] float32)
+  // Multiverse Shocked
   useEffect(() => {
     if (!initStates || !doySincos || !perturbation) return;
     let cancelled = false;
@@ -206,7 +240,7 @@ export default function App() {
   const handleDrawBoxCommit = useCallback((box) => {
     setPresetId("custom");
     setCustomShock((prev) => {
-      const next = { ...prev, box };
+      const next = { ...prev, rawPerturbation: null, rawLabel: null, box };
       setDebouncedCustomShock(next);
       return next;
     });
@@ -248,10 +282,15 @@ export default function App() {
     [primeRollout, multiRollout, safeDayIdx]
   );
 
-  const activeChannel = CHANNELS[channelIdx] || CHANNELS[1];
+  const tempStats = useMemo(
+    () => computeTemperatureSummary(primeRollout, multiRollout, safeDayIdx, activeShockBox, hoverCell),
+    [primeRollout, multiRollout, safeDayIdx, activeShockBox, hoverCell]
+  );
+
+  const activeChannel = CHANNELS[channelIdx] || CHANNELS[0];
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
+    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
       <TopBar
         health={health}
         healthError={healthError}
@@ -259,7 +298,6 @@ export default function App() {
         primeMs={primeMs}
         multiMs={multiMs}
         maxRipple={maxRipple}
-        activeChannel={activeChannel}
         detResult={detResult}
         detLoading={detLoading}
         onVerifyDeterminism={handleVerifyDeterminism}
@@ -272,7 +310,8 @@ export default function App() {
           bundledId={bundledId}
           initMeta={initMeta}
           onSelectBundled={loadBundled}
-          onUploadInitJson={handleUploadInitJson}
+          onUploadInitJson={applyCustomInitJson}
+          onPasteInitJson={applyCustomInitJson}
           loadingInit={loadingInit}
           steps={steps}
           onStepsChange={handleStepsChange}
@@ -282,16 +321,19 @@ export default function App() {
           onPresetChange={setPresetId}
           customShock={customShock}
           onCustomShockChange={setCustomShock}
+          onUploadPertJson={applyCustomPertJson}
+          onPastePertJson={applyCustomPertJson}
+          onClearRawPert={handleClearRawPert}
           onRunCustomNow={handleRunCustomNow}
           overlays={overlays}
           onOverlaysChange={setOverlays}
         />
 
-        <main className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+        <main className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 lg:p-5">
           {simError && (
-            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-200">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-800">
               <strong>Inference / Data Error:</strong> {simError} — Ensure{" "}
-              <code className="rounded bg-slate-900 px-1.5 py-0.5 text-rose-100">
+              <code className="rounded bg-white px-1.5 py-0.5 font-mono text-rose-900 ring-1 ring-rose-200">
                 .venvv/bin/python serve.py --port 8000
               </code>{" "}
               is running.
@@ -321,9 +363,16 @@ export default function App() {
             overlays={overlays}
             shockBox={activeShockBox}
             onDrawBoxCommit={handleDrawBoxCommit}
+            hoverCell={hoverCell}
+            onHoverCell={setHoverCell}
           />
 
-          <ImpactStrip metrics={metrics} dayIdx={safeDayIdx} steps={effectiveSteps} />
+          <ImpactStrip
+            metrics={metrics}
+            tempStats={tempStats}
+            dayIdx={safeDayIdx}
+            steps={effectiveSteps}
+          />
         </main>
       </div>
     </div>

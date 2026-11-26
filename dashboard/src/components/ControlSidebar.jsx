@@ -9,6 +9,8 @@ import {
   Upload,
   Play,
   Database,
+  FileCode2,
+  X,
 } from "lucide-react";
 import {
   CHANNELS,
@@ -32,6 +34,7 @@ export default function ControlSidebar({
   initMeta,
   onSelectBundled,
   onUploadInitJson,
+  onPasteInitJson,
   loadingInit,
   steps,
   onStepsChange,
@@ -41,12 +44,21 @@ export default function ControlSidebar({
   onPresetChange,
   customShock,
   onCustomShockChange,
+  onUploadPertJson,
+  onPastePertJson,
+  onClearRawPert,
   onRunCustomNow,
   overlays,
   onOverlaysChange,
 }) {
-  const [boxMode, setBoxMode] = useState("grid"); // 'grid' (Row/Col) | 'latlon'
-  const fileInputRef = useRef(null);
+  const [boxMode, setBoxMode] = useState("grid");
+  const [showInitPaste, setShowInitPaste] = useState(false);
+  const [initPasteText, setInitPasteText] = useState("");
+  const [showPertPaste, setShowPertPaste] = useState(false);
+  const [pertPasteText, setPertPasteText] = useState("");
+
+  const initFileRef = useRef(null);
+  const pertFileRef = useRef(null);
 
   const gridBox = boxToGridIndices(customShock.box);
   const boxRows = gridBox.rowMax - gridBox.rowMin + 1;
@@ -59,6 +71,8 @@ export default function ControlSidebar({
     const next = { ...gridBox, [key]: num };
     onCustomShockChange({
       ...customShock,
+      rawPerturbation: null,
+      rawLabel: null,
       box: gridIndicesToBox(next),
     });
   };
@@ -69,6 +83,8 @@ export default function ControlSidebar({
     const nextBox = { ...customShock.box, [key]: num };
     onCustomShockChange({
       ...customShock,
+      rawPerturbation: null,
+      rawLabel: null,
       box: gridIndicesToBox(boxToGridIndices(nextBox)),
     });
   };
@@ -77,6 +93,8 @@ export default function ControlSidebar({
     const prev = customShock.channels[idx];
     onCustomShockChange({
       ...customShock,
+      rawPerturbation: null,
+      rawLabel: null,
       channels: {
         ...customShock.channels,
         [idx]: { ...prev, enabled: !prev.enabled },
@@ -90,6 +108,8 @@ export default function ControlSidebar({
     const prev = customShock.channels[idx];
     onCustomShockChange({
       ...customShock,
+      rawPerturbation: null,
+      rawLabel: null,
       channels: {
         ...customShock.channels,
         [idx]: { ...prev, enabled: true, delta: num },
@@ -97,26 +117,38 @@ export default function ControlSidebar({
     });
   };
 
-  const handleFileChange = async (e) => {
+  const handleInitFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
+      const parsed = JSON.parse(await file.text());
       onUploadInitJson(parsed, file.name);
     } catch (err) {
-      alert(`Invalid JSON file: ${err.message}`);
+      alert(`Invalid init_states JSON: ${err.message}`);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const handlePertFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      onUploadPertJson(parsed, file.name);
+    } catch (err) {
+      alert(`Invalid perturbation JSON: ${err.message}`);
     } finally {
       e.target.value = "";
     }
   };
 
   return (
-    <aside className="flex w-full flex-col gap-4 border-b border-slate-800/80 bg-slate-900/50 p-4 lg:w-96 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
+    <aside className="flex w-full flex-col gap-4 border-b border-slate-200 bg-white p-4 lg:w-96 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
       {/* Inference Server Endpoint */}
       <section className="space-y-1.5">
-        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          <Server className="h-3.5 w-3.5 text-cyan-400" />
+        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Server className="h-3.5 w-3.5 text-sky-600" />
           Inference Endpoint
         </h2>
         <input
@@ -124,25 +156,25 @@ export default function ControlSidebar({
           value={apiUrl}
           onChange={(e) => onApiUrlChange(e.target.value)}
           placeholder="http://localhost:8000"
-          className="w-full rounded-lg border border-slate-700/80 bg-slate-950 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500"
+          className="w-full rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-800 outline-none focus:border-sky-500 focus:bg-white"
         />
       </section>
 
-      <hr className="border-slate-800/80" />
+      <hr className="border-slate-200" />
 
-      {/* Bundled Initial 3-Day Windows */}
-      <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            <Database className="h-3.5 w-3.5 text-cyan-400" />
+      {/* Initial 3-Day Window */}
+      <section className="space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <Database className="h-3.5 w-3.5 text-sky-600" />
             Initial 3-Day Window
           </h2>
-          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+          <span className="truncate rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
             {initMeta.label}
           </span>
         </div>
 
-        <div className="grid grid-cols-1 gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
           {BUNDLED_WINDOWS.map((w) => {
             const active = bundledId === w.id;
             return (
@@ -150,48 +182,91 @@ export default function ControlSidebar({
                 key={w.id}
                 disabled={loadingInit}
                 onClick={() => onSelectBundled(w)}
-                className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs transition ${
+                title={w.note}
+                className={`rounded-lg px-2.5 py-2 text-left text-xs font-medium transition ${
                   active
-                    ? "bg-cyan-500/20 text-cyan-200 ring-1 ring-cyan-400/60"
-                    : "bg-slate-800/70 text-slate-300 ring-1 ring-slate-700/70 hover:bg-slate-800"
+                    ? "bg-sky-50 text-sky-800 ring-1 ring-sky-400"
+                    : "bg-slate-50 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
                 }`}
               >
-                <span className="font-medium">{w.label}</span>
-                <span className="text-[10px] text-slate-400">{w.file}</span>
+                {w.label}
               </button>
             );
           })}
         </div>
 
         <input
-          ref={fileInputRef}
+          ref={initFileRef}
           type="file"
           accept=".json,application/json"
-          onChange={handleFileChange}
+          onChange={handleInitFile}
           className="hidden"
         />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-slate-700 bg-slate-950/60 py-1.5 text-[11px] text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          <span>Load Custom init_states JSON</span>
-        </button>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            onClick={() => initFileRef.current?.click()}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:border-sky-400 hover:bg-sky-50/50"
+          >
+            <Upload className="h-3.5 w-3.5 text-sky-600" />
+            <span>Upload init JSON</span>
+          </button>
+          <button
+            onClick={() => setShowInitPaste((s) => !s)}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:border-sky-400 hover:bg-sky-50/50"
+          >
+            <FileCode2 className="h-3.5 w-3.5 text-sky-600" />
+            <span>Paste init JSON</span>
+          </button>
+        </div>
+
+        {showInitPaste && (
+          <div className="space-y-2 rounded-lg bg-slate-50 p-2.5 ring-1 ring-slate-200">
+            <textarea
+              rows={3}
+              value={initPasteText}
+              onChange={(e) => setInitPasteText(e.target.value)}
+              placeholder='{"init_states": [[[...]]], "doy_sincos": [sin, cos]}'
+              className="w-full rounded border border-slate-300 bg-white p-2 font-mono text-[11px] text-slate-800 outline-none focus:border-sky-500"
+            />
+            <div className="flex justify-end gap-1.5">
+              <button
+                onClick={() => setShowInitPaste(false)}
+                className="rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-200/60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  try {
+                    const parsed = JSON.parse(initPasteText);
+                    onPasteInitJson(parsed, "pasted_init.json");
+                    setShowInitPaste(false);
+                  } catch (err) {
+                    alert(`Invalid JSON: ${err.message}`);
+                  }
+                }}
+                className="rounded bg-sky-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-sky-700"
+              >
+                Apply init_states
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
-      <hr className="border-slate-800/80" />
+      <hr className="border-slate-200" />
 
       {/* Forecast & Variable Controls */}
       <section className="space-y-3">
-        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          <Sliders className="h-3.5 w-3.5 text-cyan-400" />
+        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Sliders className="h-3.5 w-3.5 text-sky-600" />
           Forecast & Variable
         </h2>
 
         <div>
           <div className="mb-1 flex items-center justify-between text-xs">
-            <span className="text-slate-300">Forecast Horizon (steps)</span>
-            <span className="font-mono font-medium text-cyan-300">{steps} days</span>
+            <span className="font-medium text-slate-700">Forecast Horizon</span>
+            <span className="font-mono font-semibold text-sky-700">{steps} days</span>
           </div>
           <input
             type="range"
@@ -199,16 +274,18 @@ export default function ControlSidebar({
             max={14}
             value={steps}
             onChange={(e) => onStepsChange(Number(e.target.value))}
-            className="w-full accent-cyan-400"
+            className="w-full accent-sky-600"
           />
         </div>
 
         <div>
-          <label className="mb-1 block text-xs text-slate-300">Display Variable</label>
+          <label className="mb-1 block text-xs font-medium text-slate-700">
+            Display Variable
+          </label>
           <select
             value={channelIdx}
             onChange={(e) => onChannelChange(Number(e.target.value))}
-            className="w-full rounded-lg border border-slate-700/80 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500"
+            className="w-full rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-800 outline-none focus:border-sky-500 focus:bg-white"
           >
             {CHANNELS.map((ch) => (
               <option key={ch.id} value={ch.index}>
@@ -220,59 +297,59 @@ export default function ControlSidebar({
 
         {/* Map Overlays */}
         <div className="space-y-1.5 pt-1">
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
             <Layers className="h-3 w-3" /> Map Overlays
           </span>
           <div className="grid grid-cols-2 gap-1.5 text-xs">
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-950/60 px-2 py-1.5 ring-1 ring-slate-800">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200">
               <input
                 type="checkbox"
                 checked={overlays.borders}
                 onChange={(e) => onOverlaysChange({ ...overlays, borders: e.target.checked })}
-                className="accent-cyan-400"
+                className="accent-sky-600"
               />
-              <span className="text-slate-300">India Borders</span>
+              <span className="text-slate-700">India Borders</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-950/60 px-2 py-1.5 ring-1 ring-slate-800">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200">
               <input
                 type="checkbox"
                 checked={overlays.wind}
                 onChange={(e) => onOverlaysChange({ ...overlays, wind: e.target.checked })}
-                className="accent-cyan-400"
+                className="accent-sky-600"
               />
-              <Wind className="h-3 w-3 text-cyan-400" />
-              <span className="text-slate-300">Wind (u/v)</span>
+              <Wind className="h-3 w-3 text-sky-600" />
+              <span className="text-slate-700">Wind (u/v)</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-950/60 px-2 py-1.5 ring-1 ring-slate-800">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200">
               <input
                 type="checkbox"
                 checked={overlays.cities}
                 onChange={(e) => onOverlaysChange({ ...overlays, cities: e.target.checked })}
-                className="accent-cyan-400"
+                className="accent-sky-600"
               />
-              <MapPin className="h-3 w-3 text-amber-400" />
-              <span className="text-slate-300">Cities</span>
+              <MapPin className="h-3 w-3 text-orange-600" />
+              <span className="text-slate-700">Cities</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-950/60 px-2 py-1.5 ring-1 ring-slate-800">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200">
               <input
                 type="checkbox"
                 checked={overlays.shockBox}
                 onChange={(e) => onOverlaysChange({ ...overlays, shockBox: e.target.checked })}
-                className="accent-cyan-400"
+                className="accent-orange-600"
               />
-              <span className="text-slate-300">Shock Box</span>
+              <span className="text-slate-700">Shock Box</span>
             </label>
           </div>
         </div>
       </section>
 
-      <hr className="border-slate-800/80" />
+      <hr className="border-slate-200" />
 
-      {/* Multiverse Shock Presets & Custom Builder */}
+      {/* Multiverse Shock Scenarios */}
       <section className="space-y-2.5">
-        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          <Zap className="h-3.5 w-3.5 text-amber-400" />
-          Multiverse Shock Scenario
+        <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Zap className="h-3.5 w-3.5 text-orange-500" />
+          Multiverse Shock Scenarios
         </h2>
 
         <div className="space-y-1.5">
@@ -284,19 +361,19 @@ export default function ControlSidebar({
                 onClick={() => onPresetChange(preset.id)}
                 className={`w-full rounded-lg p-2.5 text-left transition ${
                   active
-                    ? "bg-amber-500/15 ring-1 ring-amber-400/60"
-                    : "bg-slate-950/50 ring-1 ring-slate-800 hover:bg-slate-800/60"
+                    ? "bg-orange-50 ring-1 ring-orange-400"
+                    : "bg-slate-50 ring-1 ring-slate-200 hover:bg-slate-100"
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className={`text-xs font-medium ${active ? "text-amber-200" : "text-slate-200"}`}>
+                  <span className={`text-xs font-semibold ${active ? "text-orange-900" : "text-slate-800"}`}>
                     {preset.name}
                   </span>
-                  <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                  <span className="shrink-0 rounded bg-white px-2 py-0.5 font-mono text-[10px] font-medium text-slate-600 ring-1 ring-slate-200">
                     {preset.badge}
                   </span>
                 </div>
-                <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                <p className="mt-1 text-[11px] leading-snug text-slate-500">
                   {preset.description}
                 </p>
               </button>
@@ -304,21 +381,36 @@ export default function ControlSidebar({
           })}
         </div>
 
-        {/* Multi-channel Custom Shock Builder */}
+        {/* Custom Shock Builder */}
         {presetId === "custom" && (
-          <div className="space-y-3 rounded-lg bg-slate-950/90 p-3 ring-1 ring-amber-500/40">
+          <div className="space-y-3 rounded-xl bg-slate-50 p-3 ring-1 ring-orange-300">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-amber-200">
+              <span className="text-xs font-bold text-orange-900">
                 Custom Shock Builder
               </span>
-              <span className="font-mono text-[10px] text-slate-400">
+              <span className="font-mono text-[10px] text-slate-500">
                 [6, 32, 36] float32
               </span>
             </div>
 
+            {customShock.rawPerturbation && (
+              <div className="flex items-center justify-between rounded-md bg-orange-100 px-2.5 py-1.5 text-[11px] text-orange-900 ring-1 ring-orange-300">
+                <span className="truncate font-medium">
+                  Active JSON: {customShock.rawLabel || "custom_perturbation.json"}
+                </span>
+                <button
+                  onClick={onClearRawPert}
+                  className="ml-2 rounded p-0.5 hover:bg-orange-200"
+                  title="Return to slider/box builder"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Channel Selection & Magnitude Sliders */}
             <div className="space-y-2">
-              <div className="text-[11px] font-medium text-slate-400">
+              <div className="text-[11px] font-medium text-slate-600">
                 Target Channels (Raw Physical Units on Day 0)
               </div>
               {CHANNELS.map((ch) => {
@@ -326,10 +418,10 @@ export default function ControlSidebar({
                 return (
                   <div
                     key={ch.id}
-                    className={`rounded-md p-2 ring-1 transition ${
-                      cfg.enabled
-                        ? "bg-slate-900/90 ring-amber-500/40"
-                        : "bg-slate-900/40 ring-slate-800/80 opacity-75"
+                    className={`rounded-lg p-2 ring-1 transition ${
+                      cfg.enabled && !customShock.rawPerturbation
+                        ? "bg-white ring-orange-300"
+                        : "bg-white/60 ring-slate-200 opacity-80"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -338,24 +430,24 @@ export default function ControlSidebar({
                           type="checkbox"
                           checked={cfg.enabled}
                           onChange={() => toggleCustomChannel(ch.index)}
-                          className="accent-amber-400"
+                          className="accent-orange-600"
                         />
-                        <span className="font-mono font-semibold text-slate-200">
+                        <span className="font-mono font-semibold text-slate-800">
                           {ch.short}
                         </span>
-                        <span className="text-[11px] text-slate-400">({ch.rawUnit})</span>
+                        <span className="text-[11px] text-slate-500">({ch.rawUnit})</span>
                       </label>
                       <input
                         type="number"
                         step={ch.step}
                         value={cfg.delta}
                         onChange={(e) => setCustomChannelDelta(ch.index, e.target.value)}
-                        className="w-20 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-right font-mono text-xs text-amber-300 outline-none focus:border-amber-400"
+                        className="w-20 rounded border border-slate-300 bg-slate-50 px-2 py-0.5 text-right font-mono text-xs font-semibold text-orange-700 outline-none focus:border-orange-500 focus:bg-white"
                       />
                     </div>
                     {cfg.enabled && (
                       <div className="mt-1.5 flex items-center gap-2">
-                        <span className="w-8 font-mono text-[10px] text-slate-500">
+                        <span className="w-8 font-mono text-[10px] text-slate-400">
                           {ch.sliderMin}
                         </span>
                         <input
@@ -365,9 +457,9 @@ export default function ControlSidebar({
                           step={ch.step}
                           value={Math.max(ch.sliderMin, Math.min(ch.sliderMax, cfg.delta))}
                           onChange={(e) => setCustomChannelDelta(ch.index, e.target.value)}
-                          className="w-full accent-amber-400"
+                          className="w-full accent-orange-500"
                         />
-                        <span className="w-8 text-right font-mono text-[10px] text-slate-500">
+                        <span className="w-8 text-right font-mono text-[10px] text-slate-400">
                           +{ch.sliderMax}
                         </span>
                       </div>
@@ -378,24 +470,24 @@ export default function ControlSidebar({
             </div>
 
             {/* Bounding Box Controls (Synced with Map Drag) */}
-            <div className="space-y-2 border-t border-slate-800 pt-2.5">
+            <div className="space-y-2 border-t border-slate-200 pt-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-slate-400">
-                  Region Box ({boxRows}×{boxCols} = {affectedCells} cells)
+                <span className="text-[11px] font-medium text-slate-600">
+                  Region Box ({boxRows} × {boxCols} = {affectedCells} cells)
                 </span>
-                <div className="flex rounded bg-slate-900 p-0.5 ring-1 ring-slate-800 text-[10px]">
+                <div className="flex rounded-md bg-white p-0.5 ring-1 ring-slate-200 text-[10px]">
                   <button
                     onClick={() => setBoxMode("grid")}
-                    className={`rounded px-1.5 py-0.5 ${
-                      boxMode === "grid" ? "bg-slate-800 text-amber-300" : "text-slate-400"
+                    className={`rounded px-2 py-0.5 font-medium ${
+                      boxMode === "grid" ? "bg-orange-50 text-orange-700" : "text-slate-500"
                     }`}
                   >
                     Row / Col
                   </button>
                   <button
                     onClick={() => setBoxMode("latlon")}
-                    className={`rounded px-1.5 py-0.5 ${
-                      boxMode === "latlon" ? "bg-slate-800 text-amber-300" : "text-slate-400"
+                    className={`rounded px-2 py-0.5 font-medium ${
+                      boxMode === "latlon" ? "bg-orange-50 text-orange-700" : "text-slate-500"
                     }`}
                   >
                     Lat / Lon
@@ -404,60 +496,60 @@ export default function ControlSidebar({
               </div>
 
               <p className="text-[10px] text-slate-500">
-                Drag directly on Prime or Multiverse maps, or enter exact bounds:
+                Click & drag directly on Prime or Multiverse maps, or enter bounds:
               </p>
 
               {boxMode === "grid" ? (
                 <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Row Min (0–{NLAT - 1})</span>
+                    <span className="text-slate-500">Row Min (0–{NLAT - 1})</span>
                     <input
                       type="number"
                       min={0}
                       max={NLAT - 1}
                       value={gridBox.rowMin}
                       onChange={(e) => updateGridBound("rowMin", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Row Max (0–{NLAT - 1})</span>
+                    <span className="text-slate-500">Row Max (0–{NLAT - 1})</span>
                     <input
                       type="number"
                       min={0}
                       max={NLAT - 1}
                       value={gridBox.rowMax}
                       onChange={(e) => updateGridBound("rowMax", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Col Min (0–{NLON - 1})</span>
+                    <span className="text-slate-500">Col Min (0–{NLON - 1})</span>
                     <input
                       type="number"
                       min={0}
                       max={NLON - 1}
                       value={gridBox.colMin}
                       onChange={(e) => updateGridBound("colMin", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Col Max (0–{NLON - 1})</span>
+                    <span className="text-slate-500">Col Max (0–{NLON - 1})</span>
                     <input
                       type="number"
                       min={0}
                       max={NLON - 1}
                       value={gridBox.colMax}
                       onChange={(e) => updateGridBound("colMax", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-1.5 text-[11px]">
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Lat Min ({LAT_MIN}–{LAT_MAX}°N)</span>
+                    <span className="text-slate-500">Lat Min ({LAT_MIN}–{LAT_MAX}°N)</span>
                     <input
                       type="number"
                       step={1}
@@ -465,11 +557,11 @@ export default function ControlSidebar({
                       max={LAT_MAX}
                       value={customShock.box.latMin}
                       onChange={(e) => updateLatLonBound("latMin", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Lat Max ({LAT_MIN}–{LAT_MAX}°N)</span>
+                    <span className="text-slate-500">Lat Max ({LAT_MIN}–{LAT_MAX}°N)</span>
                     <input
                       type="number"
                       step={1}
@@ -477,11 +569,11 @@ export default function ControlSidebar({
                       max={LAT_MAX}
                       value={customShock.box.latMax}
                       onChange={(e) => updateLatLonBound("latMax", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Lon Min ({LON_MIN}–{LON_MAX}°E)</span>
+                    <span className="text-slate-500">Lon Min ({LON_MIN}–{LON_MAX}°E)</span>
                     <input
                       type="number"
                       step={1}
@@ -489,11 +581,11 @@ export default function ControlSidebar({
                       max={LON_MAX}
                       value={customShock.box.lonMin}
                       onChange={(e) => updateLatLonBound("lonMin", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                   <label className="flex flex-col gap-0.5">
-                    <span className="text-slate-400">Lon Max ({LON_MIN}–{LON_MAX}°E)</span>
+                    <span className="text-slate-500">Lon Max ({LON_MIN}–{LON_MAX}°E)</span>
                     <input
                       type="number"
                       step={1}
@@ -501,19 +593,25 @@ export default function ControlSidebar({
                       max={LON_MAX}
                       value={customShock.box.lonMax}
                       onChange={(e) => updateLatLonBound("lonMax", e.target.value)}
-                      className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
+                      className="rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-800"
                     />
                   </label>
                 </div>
               )}
 
-              {/* Quick Region Shortcuts */}
               <div className="flex flex-wrap gap-1 pt-0.5">
                 {QUICK_REGIONS.map((reg) => (
                   <button
                     key={reg.label}
-                    onClick={() => onCustomShockChange({ ...customShock, box: reg.box })}
-                    className="rounded bg-slate-800/90 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700"
+                    onClick={() =>
+                      onCustomShockChange({
+                        ...customShock,
+                        rawPerturbation: null,
+                        rawLabel: null,
+                        box: reg.box,
+                      })
+                    }
+                    className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
                   >
                     {reg.label}
                   </button>
@@ -521,9 +619,68 @@ export default function ControlSidebar({
               </div>
             </div>
 
+            {/* Upload / Paste [6, 32, 36] Perturbation JSON */}
+            <input
+              ref={pertFileRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handlePertFile}
+              className="hidden"
+            />
+            <div className="grid grid-cols-2 gap-1.5 border-t border-slate-200 pt-2.5">
+              <button
+                onClick={() => pertFileRef.current?.click()}
+                className="flex items-center justify-center gap-1 rounded-md border border-dashed border-slate-300 bg-white px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:border-orange-400"
+              >
+                <Upload className="h-3 w-3 text-orange-600" />
+                <span>Upload shock JSON</span>
+              </button>
+              <button
+                onClick={() => setShowPertPaste((s) => !s)}
+                className="flex items-center justify-center gap-1 rounded-md border border-dashed border-slate-300 bg-white px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:border-orange-400"
+              >
+                <FileCode2 className="h-3 w-3 text-orange-600" />
+                <span>Paste shock JSON</span>
+              </button>
+            </div>
+
+            {showPertPaste && (
+              <div className="space-y-2 rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                <textarea
+                  rows={3}
+                  value={pertPasteText}
+                  onChange={(e) => setPertPasteText(e.target.value)}
+                  placeholder="Paste [6, 32, 36] array or {&quot;perturbation&quot;: [...]}"
+                  className="w-full rounded border border-slate-300 bg-slate-50 p-1.5 font-mono text-[11px] text-slate-800 outline-none focus:border-orange-500"
+                />
+                <div className="flex justify-end gap-1.5">
+                  <button
+                    onClick={() => setShowPertPaste(false)}
+                    className="rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      try {
+                        const parsed = JSON.parse(pertPasteText);
+                        onPastePertJson(parsed, "pasted_shock.json");
+                        setShowPertPaste(false);
+                      } catch (err) {
+                        alert(`Invalid perturbation JSON: ${err.message}`);
+                      }
+                    }}
+                    className="rounded bg-orange-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-orange-700"
+                  >
+                    Apply Shock Tensor
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={onRunCustomNow}
-              className="flex w-full items-center justify-center gap-1.5 rounded-md bg-amber-500/20 py-1.5 text-xs font-semibold text-amber-200 ring-1 ring-amber-400/50 transition hover:bg-amber-500/30"
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-orange-600 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-orange-700"
             >
               <Play className="h-3.5 w-3.5" />
               <span>Run Custom Shock Simulation</span>

@@ -1,25 +1,54 @@
-// Compact perceptual colormaps (5-9 key stops interpolated linearly to 256-entry RGB LUTs)
+// AccuWeather-inspired weather radar & thermal ramps for light-theme cartography
 
 const STOPS = {
-  viridis: [
-    [68, 1, 84],
-    [59, 82, 139],
-    [33, 145, 140],
-    [94, 201, 98],
-    [253, 231, 37],
-  ],
-  blues: [
-    [15, 23, 42],
-    [30, 58, 138],
-    [2, 132, 199],
+  // Cool teal/azure -> emerald -> warm gold -> AccuWeather orange -> deep crimson
+  accu_temp: [
+    [14, 116, 144],
     [56, 189, 248],
-    [224, 242, 254],
+    [74, 222, 128],
+    [250, 204, 21],
+    [249, 115, 22],
+    [185, 28, 28],
   ],
-  rdbu_r: [
-    [37, 99, 235],
-    [147, 197, 253],
+  // Light coastal mist -> aqua -> radar green -> cobalt -> intense violet storm core
+  accu_rain: [
     [241, 245, 249],
-    [252, 165, 165],
+    [186, 230, 253],
+    [56, 189, 248],
+    [37, 99, 235],
+    [109, 40, 217],
+    [190, 24, 93],
+  ],
+  // Slate-sky -> teal -> gold -> amber wind gusts
+  accu_wind: [
+    [226, 232, 240],
+    [125, 211, 252],
+    [20, 184, 166],
+    [245, 158, 11],
+    [220, 38, 38],
+  ],
+  // Deep indigo low-pressure -> sky -> neutral cream -> amber ridge
+  accu_pressure: [
+    [67, 56, 202],
+    [56, 189, 248],
+    [226, 232, 240],
+    [251, 191, 36],
+    [234, 88, 12],
+  ],
+  // Dry sand -> pale mint -> sky blue -> deep moisture cobalt
+  accu_moisture: [
+    [254, 243, 199],
+    [167, 243, 208],
+    [56, 189, 248],
+    [29, 78, 216],
+    [30, 58, 138],
+  ],
+  // Diverging Causal Difference centered at clean light off-white
+  rdbu_r: [
+    [29, 78, 216],
+    [147, 197, 253],
+    [248, 250, 252],
+    [253, 164, 175],
     [220, 38, 38],
   ],
 };
@@ -41,13 +70,16 @@ function buildLut(stops) {
 }
 
 export const LUTS = {
-  viridis: buildLut(STOPS.viridis),
-  blues: buildLut(STOPS.blues),
+  accu_temp: buildLut(STOPS.accu_temp),
+  accu_rain: buildLut(STOPS.accu_rain),
+  accu_wind: buildLut(STOPS.accu_wind),
+  accu_pressure: buildLut(STOPS.accu_pressure),
+  accu_moisture: buildLut(STOPS.accu_moisture),
   rdbu_r: buildLut(STOPS.rdbu_r),
 };
 
 export function cssGradient(name) {
-  const stops = STOPS[name] || STOPS.viridis;
+  const stops = STOPS[name] || STOPS.accu_temp;
   const cssStops = stops.map(([r, g, b], i) => {
     const pct = Math.round((i / (stops.length - 1)) * 100);
     return `rgb(${r},${g},${b}) ${pct}%`;
