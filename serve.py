@@ -16,6 +16,9 @@ import numpy as np
 import onnxruntime as ort
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 APP_DIR = Path(__file__).resolve().parent
 ARTIFACTS_DIR = APP_DIR / "model" / "artifacts"
@@ -29,8 +32,9 @@ _MEAN = np.array(_stats["mean"], dtype=np.float32).reshape(1, 6, 1, 1)
 _STD = np.array(_stats["std"], dtype=np.float32).reshape(1, 6, 1, 1)
 
 _static_npz = np.load(ARTIFACTS_DIR / "static_fields.npz")
-_STATIC_NORM = _static_npz["static_norm"].astype(np.float32)  # [2, 32, 36]
-
+_STATIC_NORM = np.stack(
+    [_static_npz["land_sea_mask"], _static_npz["orography_norm"]], axis=0
+).astype(np.float32)  # [2, 32, 36]
 # Configure ONNX Runtime for fast deterministic CPU inference
 _sess_opts = ort.SessionOptions()
 _sess_opts.intra_op_num_threads = 4
@@ -44,7 +48,12 @@ _SESSION = ort.InferenceSession(
 _INPUT_NAME = _SESSION.get_inputs()[0].name
 
 app = FastAPI(title="Monsoon-Multiverse Digital Twin API")
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def _decode_arr(x) -> np.ndarray:
     """Accept canonical nested JSON lists or tolerated {'b64': ..., 'shape': [...]}."""

@@ -114,6 +114,7 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--base-channels", type=int, default=48)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--resume", action="store_true", help="Resume from existing monsoon_unet.pt checkpoint")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -145,6 +146,10 @@ def main() -> None:
     ch_weights = torch.tensor([1.0, 2.0, 1.0, 1.0, 1.0, 1.0], device=device)
     best_val_rmse = float("inf")
     best_pt = args.artifacts / "monsoon_unet.pt"
+    if args.resume and best_pt.exists():
+        model.load_state_dict(torch.load(best_pt, map_location=device, weights_only=True))
+        best_val_rmse = evaluate_val_day4_rmse(model, val_loader, static_norm, mean, std, device)
+        print(f"Resumed from {best_pt} (val_d4_nrmse={best_val_rmse:.4f})", flush=True)
 
     # ---- Stage 1: 1-step training ----
     opt1 = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
