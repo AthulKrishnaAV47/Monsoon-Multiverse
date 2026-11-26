@@ -7,8 +7,8 @@
 data/
 
 # Python environments & caches
-.venv/
-venv/
+.venvv/
+venvv/
 env/
 __pycache__/
 *.py[cod]
